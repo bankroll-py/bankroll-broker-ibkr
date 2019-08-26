@@ -2,15 +2,35 @@ import logging
 import math
 import re
 from datetime import datetime
-from decimal import (Context, Decimal, DivisionByZero, InvalidOperation,
-                     Overflow, localcontext)
+from decimal import (
+    Context,
+    Decimal,
+    DivisionByZero,
+    InvalidOperation,
+    Overflow,
+    localcontext,
+)
 from enum import Enum, IntEnum, unique
 from itertools import chain, count
 from pathlib import Path
 from random import randint
-from typing import (Any, Awaitable, Callable, Dict, Iterable, List, Mapping,
-                    NamedTuple, Optional, Sequence, Tuple, Type, TypeVar,
-                    Union, no_type_check)
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    NamedTuple,
+    Optional,
+    Sequence,
+    Tuple,
+    Type,
+    TypeVar,
+    Union,
+    no_type_check,
+)
 
 import backoff  # type: ignore
 import ib_insync as IB  # type: ignore
@@ -19,18 +39,33 @@ from progress.spinner import Spinner  # type: ignore
 
 from bankroll.broker import configuration, parsetools
 from bankroll.marketdata import MarketConnectedAccountData, MarketDataProvider
-from bankroll.model import (AccountBalance, Activity, Bond, Cash, CashPayment,
-                            Currency, Forex, Future, FutureOption, Instrument,
-                            Option, OptionType, Position, Quote, Stock, Trade,
-                            TradeFlags)
+from bankroll.model import (
+    AccountBalance,
+    Activity,
+    Bond,
+    Cash,
+    CashPayment,
+    Currency,
+    Forex,
+    Future,
+    FutureOption,
+    Instrument,
+    Option,
+    OptionType,
+    Position,
+    Quote,
+    Stock,
+    Trade,
+    TradeFlags,
+)
 
 
 @unique
 class Settings(configuration.Settings):
-    TWS_PORT = 'TWS port'
-    FLEX_TOKEN = 'Flex token'
-    TRADES = 'Trades'
-    ACTIVITY = 'Activity'
+    TWS_PORT = "TWS port"
+    FLEX_TOKEN = "Flex token"
+    TRADES = "Trades"
+    ACTIVITY = "Activity"
 
     @property
     def help(self) -> str:
@@ -47,79 +82,85 @@ class Settings(configuration.Settings):
 
     @classmethod
     def sectionName(cls) -> str:
-        return 'IBKR'
+        return "IBKR"
 
 
 def _parseFiniteDecimal(input: str) -> Decimal:
     with localcontext(ctx=Context(traps=[DivisionByZero, Overflow])):
         value = Decimal(input)
         if not value.is_finite():
-            raise ValueError(f'Input is not numeric: {input}')
+            raise ValueError(f"Input is not numeric: {input}")
 
         return value
 
 
-def _parseOption(symbol: str,
-                 currency: Currency,
-                 multiplier: Decimal,
-                 exchange: Optional[str],
-                 cls: Type[Option] = Option) -> Option:
+def _parseOption(
+    symbol: str,
+    currency: Currency,
+    multiplier: Decimal,
+    exchange: Optional[str],
+    cls: Type[Option] = Option,
+) -> Option:
     # https://en.wikipedia.org/wiki/Option_symbol#The_OCC_Option_Symbol
     match = re.match(
-        r'^(?P<underlying>.{6})(?P<date>\d{6})(?P<putCall>P|C)(?P<strike>\d{8})$',
-        symbol)
+        r"^(?P<underlying>.{6})(?P<date>\d{6})(?P<putCall>P|C)(?P<strike>\d{8})$",
+        symbol,
+    )
     if not match:
-        raise ValueError(f'Could not parse IB option symbol: {symbol}')
+        raise ValueError(f"Could not parse IB option symbol: {symbol}")
 
-    if match['putCall'] == 'P':
+    if match["putCall"] == "P":
         optionType = OptionType.PUT
     else:
         optionType = OptionType.CALL
 
-    return cls(underlying=match['underlying'].rstrip(),
-               currency=currency,
-               optionType=optionType,
-               expiration=datetime.strptime(match['date'], '%y%m%d').date(),
-               strike=_parseFiniteDecimal(match['strike']) / 1000,
-               exchange=exchange)
+    return cls(
+        underlying=match["underlying"].rstrip(),
+        currency=currency,
+        optionType=optionType,
+        expiration=datetime.strptime(match["date"], "%y%m%d").date(),
+        strike=_parseFiniteDecimal(match["strike"]) / 1000,
+        exchange=exchange,
+    )
 
 
-def _parseForex(symbol: str, currency: Currency,
-                exchange: Optional[str]) -> Forex:
-    match = re.match(r'^(?P<base>[A-Z]{3})\.(?P<quote>[A-Z]{3})', symbol)
+def _parseForex(symbol: str, currency: Currency, exchange: Optional[str]) -> Forex:
+    match = re.match(r"^(?P<base>[A-Z]{3})\.(?P<quote>[A-Z]{3})", symbol)
     if not match:
-        raise ValueError(f'Could not parse IB cash symbol: {symbol}')
+        raise ValueError(f"Could not parse IB cash symbol: {symbol}")
 
-    baseCurrency = Currency[match['base']]
-    quoteCurrency = Currency[match['quote']]
+    baseCurrency = Currency[match["base"]]
+    quoteCurrency = Currency[match["quote"]]
     if currency != quoteCurrency:
         raise ValueError(
-            f'Expected quote currency {quoteCurrency} to match position currency {currency}'
+            f"Expected quote currency {quoteCurrency} to match position currency {currency}"
         )
 
-    return Forex(baseCurrency=baseCurrency,
-                 quoteCurrency=quoteCurrency,
-                 exchange=exchange)
+    return Forex(
+        baseCurrency=baseCurrency, quoteCurrency=quoteCurrency, exchange=exchange
+    )
 
 
-def _parseFutureOptionContract(contract: IB.Contract, currency: Currency,
-                               exchange: Optional[str]) -> Instrument:
-    if contract.right.startswith('C'):
+def _parseFutureOptionContract(
+    contract: IB.Contract, currency: Currency, exchange: Optional[str]
+) -> Instrument:
+    if contract.right.startswith("C"):
         optionType = OptionType.CALL
-    elif contract.right.startswith('P'):
+    elif contract.right.startswith("P"):
         optionType = OptionType.PUT
     else:
-        raise ValueError(f'Unexpected right in IB contract: {contract}')
+        raise ValueError(f"Unexpected right in IB contract: {contract}")
 
-    return FutureOption(symbol=contract.localSymbol,
-                        currency=currency,
-                        underlying=contract.symbol,
-                        optionType=optionType,
-                        expiration=_parseIBDate(
-                            contract.lastTradeDateOrContractMonth).date(),
-                        strike=_parseFiniteDecimal(contract.strike),
-                        multiplier=_parseFiniteDecimal(contract.multiplier),
-                        exchange=exchange)
+    return FutureOption(
+        symbol=contract.localSymbol,
+        currency=currency,
+        underlying=contract.symbol,
+        optionType=optionType,
+        expiration=_parseIBDate(contract.lastTradeDateOrContractMonth).date(),
+        strike=_parseFiniteDecimal(contract.strike),
+        multiplier=_parseFiniteDecimal(contract.multiplier),
+        exchange=exchange,
+    )
 
 
 def _extractPosition(p: IB.Position) -> Position:
@@ -127,66 +168,68 @@ def _extractPosition(p: IB.Position) -> Position:
     symbol = p.contract.localSymbol
 
     if p.contract.currency not in Currency.__members__:
-        raise ValueError(f'Unrecognized currency in position: {p}')
+        raise ValueError(f"Unrecognized currency in position: {p}")
 
     currency = Currency[p.contract.currency]
     exchange = p.contract.exchange or None
 
     try:
         instrument: Instrument
-        if tag == 'STK':
-            instrument = Stock(symbol=symbol,
-                               currency=currency,
-                               exchange=exchange)
-        elif tag == 'BILL' or tag == 'BOND':
-            instrument = Bond(symbol=symbol,
-                              currency=currency,
-                              validateSymbol=False,
-                              exchange=exchange)
-        elif tag == 'OPT':
-            instrument = _parseOption(symbol=symbol,
-                                      currency=currency,
-                                      multiplier=_parseFiniteDecimal(
-                                          p.contract.multiplier),
-                                      exchange=exchange)
-        elif tag == 'FUT':
+        if tag == "STK":
+            instrument = Stock(symbol=symbol, currency=currency, exchange=exchange)
+        elif tag == "BILL" or tag == "BOND":
+            instrument = Bond(
+                symbol=symbol,
+                currency=currency,
+                validateSymbol=False,
+                exchange=exchange,
+            )
+        elif tag == "OPT":
+            instrument = _parseOption(
+                symbol=symbol,
+                currency=currency,
+                multiplier=_parseFiniteDecimal(p.contract.multiplier),
+                exchange=exchange,
+            )
+        elif tag == "FUT":
             instrument = Future(
                 symbol=symbol,
                 currency=currency,
                 multiplier=_parseFiniteDecimal(p.contract.multiplier),
-                expiration=_parseIBDate(
-                    p.contract.lastTradeDateOrContractMonth).date(),
-                exchange=exchange)
-        elif tag == 'FOP':
-            instrument = _parseFutureOptionContract(p.contract,
-                                                    currency=currency,
-                                                    exchange=exchange)
-        elif tag == 'CASH':
-            instrument = _parseForex(symbol=symbol,
-                                     currency=currency,
-                                     exchange=exchange)
+                expiration=_parseIBDate(p.contract.lastTradeDateOrContractMonth).date(),
+                exchange=exchange,
+            )
+        elif tag == "FOP":
+            instrument = _parseFutureOptionContract(
+                p.contract, currency=currency, exchange=exchange
+            )
+        elif tag == "CASH":
+            instrument = _parseForex(
+                symbol=symbol, currency=currency, exchange=exchange
+            )
         else:
-            raise ValueError(
-                f'Unrecognized/unsupported security type in position: {p}')
+            raise ValueError(f"Unrecognized/unsupported security type in position: {p}")
 
         qty = _parseFiniteDecimal(p.position)
         costBasis = _parseFiniteDecimal(p.avgCost) * qty
 
-        return Position(instrument=instrument,
-                        quantity=qty,
-                        costBasis=Cash(currency=Currency[p.contract.currency],
-                                       quantity=costBasis))
+        return Position(
+            instrument=instrument,
+            quantity=qty,
+            costBasis=Cash(currency=Currency[p.contract.currency], quantity=costBasis),
+        )
     except InvalidOperation:
         raise ValueError(
-            f'One of the numeric position or contract values is out of range: {p}'
+            f"One of the numeric position or contract values is out of range: {p}"
         )
 
 
 def _downloadPositions(ib: IB.IB, lenient: bool) -> List[Position]:
     return list(
-        parsetools.lenientParse(ib.positions(),
-                     transform=_extractPosition,
-                     lenient=lenient))
+        parsetools.lenientParse(
+            ib.positions(), transform=_extractPosition, lenient=lenient
+        )
+    )
 
 
 class _IBTradeConfirm(NamedTuple):
@@ -353,39 +396,41 @@ class _IBSLBFee(NamedTuple):
 
 
 def _parseIBDate(datestr: str) -> datetime:
-    return datetime.strptime(datestr, '%Y%m%d')
+    return datetime.strptime(datestr, "%Y%m%d")
 
 
-_instrumentEntryTypes = Union[_IBTradeConfirm, _IBChangeInDividendAccrual,
-                              _IBSLBFee]
+_instrumentEntryTypes = Union[_IBTradeConfirm, _IBChangeInDividendAccrual, _IBSLBFee]
 
 
-def _parseFutureOption(entry: _instrumentEntryTypes,
-                       exchange: Optional[str]) -> Instrument:
-    if entry.putCall == 'C':
+def _parseFutureOption(
+    entry: _instrumentEntryTypes, exchange: Optional[str]
+) -> Instrument:
+    if entry.putCall == "C":
         optionType = OptionType.CALL
-    elif entry.putCall == 'P':
+    elif entry.putCall == "P":
         optionType = OptionType.PUT
     else:
-        raise ValueError(f'Unexpected value for putCall in IB entry: {entry}')
+        raise ValueError(f"Unexpected value for putCall in IB entry: {entry}")
 
-    return FutureOption(symbol=entry.symbol,
-                        currency=Currency[entry.currency],
-                        underlying=entry.underlyingSymbol,
-                        optionType=optionType,
-                        expiration=_parseIBDate(entry.expiry).date(),
-                        strike=_parseFiniteDecimal(entry.strike),
-                        multiplier=_parseFiniteDecimal(entry.multiplier),
-                        exchange=exchange)
+    return FutureOption(
+        symbol=entry.symbol,
+        currency=Currency[entry.currency],
+        underlying=entry.underlyingSymbol,
+        optionType=optionType,
+        expiration=_parseIBDate(entry.expiry).date(),
+        strike=_parseFiniteDecimal(entry.strike),
+        multiplier=_parseFiniteDecimal(entry.multiplier),
+        exchange=exchange,
+    )
 
 
 def _parseInstrument(entry: _instrumentEntryTypes) -> Instrument:
     symbol = entry.symbol
     if not symbol:
-        raise ValueError(f'Missing symbol in entry: {entry}')
+        raise ValueError(f"Missing symbol in entry: {entry}")
 
     if entry.currency not in Currency.__members__:
-        raise ValueError(f'Unrecognized currency in entry: {entry}')
+        raise ValueError(f"Unrecognized currency in entry: {entry}")
 
     currency = Currency[entry.currency]
 
@@ -397,31 +442,33 @@ def _parseInstrument(entry: _instrumentEntryTypes) -> Instrument:
     exchange = exchange or entry.listingExchange or None
 
     tag = entry.assetCategory
-    if tag == 'STK':
+    if tag == "STK":
         return Stock(symbol=symbol, currency=currency, exchange=exchange)
-    elif tag == 'BILL' or tag == 'BOND':
-        return Bond(symbol=symbol,
-                    currency=currency,
-                    validateSymbol=False,
-                    exchange=exchange)
-    elif tag == 'OPT':
-        return _parseOption(symbol=symbol,
-                            currency=currency,
-                            multiplier=_parseFiniteDecimal(entry.multiplier),
-                            exchange=exchange)
-    elif tag == 'FUT':
-        return Future(symbol=symbol,
-                      currency=currency,
-                      multiplier=_parseFiniteDecimal(entry.multiplier),
-                      expiration=_parseIBDate(entry.expiry).date(),
-                      exchange=exchange)
-    elif tag == 'CASH':
+    elif tag == "BILL" or tag == "BOND":
+        return Bond(
+            symbol=symbol, currency=currency, validateSymbol=False, exchange=exchange
+        )
+    elif tag == "OPT":
+        return _parseOption(
+            symbol=symbol,
+            currency=currency,
+            multiplier=_parseFiniteDecimal(entry.multiplier),
+            exchange=exchange,
+        )
+    elif tag == "FUT":
+        return Future(
+            symbol=symbol,
+            currency=currency,
+            multiplier=_parseFiniteDecimal(entry.multiplier),
+            expiration=_parseIBDate(entry.expiry).date(),
+            exchange=exchange,
+        )
+    elif tag == "CASH":
         return _parseForex(symbol=symbol, currency=currency, exchange=exchange)
-    elif tag == 'FOP':
+    elif tag == "FOP":
         return _parseFutureOption(entry, exchange=exchange)
     else:
-        raise ValueError(
-            f'Unrecognized/unsupported security type in entry: {entry}')
+        raise ValueError(f"Unrecognized/unsupported security type in entry: {entry}")
 
 
 def _parseTradeConfirm(trade: _IBTradeConfirm) -> Trade:
@@ -431,20 +478,17 @@ def _parseTradeConfirm(trade: _IBTradeConfirm) -> Trade:
         flagsByCode = {
             # Codes referenced from:
             # https://www.interactivebrokers.com/en/software/reportguide/reportguide.htm#reportguide/codestradeconfirm.htm
-
-            'A': TradeFlags.ASSIGNED_OR_EXERCISED, # Assignment
-            'C': TradeFlags.CLOSE, # Closing Trade
-            'Ep': TradeFlags.EXPIRED, # Resulted from an Expired Position
-            'Ex': TradeFlags.ASSIGNED_OR_EXERCISED, # Exercise
-            'L': TradeFlags.LIQUIDATED, # Ordered by IB (Margin Violation, Forced Futures Sell)
-            'O': TradeFlags.OPEN, # Opening Trade
-            'R': TradeFlags.DRIP, # Dividend Reinvestment
-            'T': TradeFlags.OPEN, # Transfer
-
+            "A": TradeFlags.ASSIGNED_OR_EXERCISED,  # Assignment
+            "C": TradeFlags.CLOSE,  # Closing Trade
+            "Ep": TradeFlags.EXPIRED,  # Resulted from an Expired Position
+            "Ex": TradeFlags.ASSIGNED_OR_EXERCISED,  # Exercise
+            "L": TradeFlags.LIQUIDATED,  # Ordered by IB (Margin Violation, Forced Futures Sell)
+            "O": TradeFlags.OPEN,  # Opening Trade
+            "R": TradeFlags.DRIP,  # Dividend Reinvestment
+            "T": TradeFlags.OPEN,  # Transfer
             # Ignored
-            'D': TradeFlags.NONE, # IB acted as Dual Agent
-            'P': TradeFlags.NONE, # Partial Execution
-
+            "D": TradeFlags.NONE,  # IB acted as Dual Agent
+            "P": TradeFlags.NONE,  # Partial Execution
             # Currently Unsupported
             # 'B': TradeFlags.NONE, # Automatic Buy-in
             # 'Ca': TradeFlags.NONE, # Cancelled
@@ -454,150 +498,180 @@ def _parseTradeConfirm(trade: _IBTradeConfirm) -> Trade:
             # 'Si': TradeFlags.NONE, # Solicited Trade (This order was solicited by Interactive Brokers).
         }
 
-        codes = trade.code.split(';')
+        codes = trade.code.split(";")
         flags = TradeFlags.NONE
         for c in codes:
-            if c == '':
+            if c == "":
                 continue
 
             if c not in flagsByCode:
-                raise ValueError(f'Unrecognized code {c} in trade: {trade}')
+                raise ValueError(f"Unrecognized code {c} in trade: {trade}")
 
             flags |= flagsByCode[c]
 
         # Codes are not always populated with open/close, not sure why
         if flags & (TradeFlags.OPEN | TradeFlags.CLOSE) == TradeFlags.NONE:
-            if trade.buySell == 'BUY':
+            if trade.buySell == "BUY":
                 flags |= TradeFlags.OPEN
             else:
                 flags |= TradeFlags.CLOSE
 
         if trade.commissionCurrency not in Currency.__members__:
-            raise ValueError(f'Unrecognized currency in trade: {trade}')
+            raise ValueError(f"Unrecognized currency in trade: {trade}")
 
         # We could choose to account for accrued interest payments as part of
         # the trade price or as a separate cash payment; the former seems
         # marginally cleaner and more sensible for a trade log.
-        proceeds = Cash(currency=Currency[trade.currency],
-                        quantity=_parseFiniteDecimal(trade.proceeds) +
-                        _parseFiniteDecimal(trade.accruedInt))
+        proceeds = Cash(
+            currency=Currency[trade.currency],
+            quantity=_parseFiniteDecimal(trade.proceeds)
+            + _parseFiniteDecimal(trade.accruedInt),
+        )
 
-        return Trade(date=_parseIBDate(trade.tradeDate),
-                     instrument=instrument,
-                     quantity=_parseFiniteDecimal(trade.quantity),
-                     amount=proceeds,
-                     fees=Cash(
-                         currency=Currency[trade.commissionCurrency],
-                         quantity=-(_parseFiniteDecimal(trade.commission) +
-                                    _parseFiniteDecimal(trade.tax))),
-                     flags=flags)
+        return Trade(
+            date=_parseIBDate(trade.tradeDate),
+            instrument=instrument,
+            quantity=_parseFiniteDecimal(trade.quantity),
+            amount=proceeds,
+            fees=Cash(
+                currency=Currency[trade.commissionCurrency],
+                quantity=-(
+                    _parseFiniteDecimal(trade.commission)
+                    + _parseFiniteDecimal(trade.tax)
+                ),
+            ),
+            flags=flags,
+        )
     except InvalidOperation:
-        raise ValueError(
-            f'One of the numeric trade values is out of range: {trade}')
+        raise ValueError(f"One of the numeric trade values is out of range: {trade}")
 
 
 def _tradesFromReport(report: IB.FlexReport, lenient: bool) -> List[Trade]:
     return list(
         parsetools.lenientParse(
-            (_IBTradeConfirm(**t.__dict__)
-             for t in report.extract('TradeConfirm', parseNumbers=False)),
+            (
+                _IBTradeConfirm(**t.__dict__)
+                for t in report.extract("TradeConfirm", parseNumbers=False)
+            ),
             transform=_parseTradeConfirm,
-            lenient=lenient))
+            lenient=lenient,
+        )
+    )
 
 
 def _parseTrades(path: Path, lenient: bool = False) -> List[Trade]:
     return _tradesFromReport(IB.FlexReport(path=path), lenient=lenient)
 
 
-def _parseChangeInDividendAccrual(entry: _IBChangeInDividendAccrual
-                                  ) -> Optional[Activity]:
-    codes = entry.code.split(';')
-    if 'Re' not in codes:
+def _parseChangeInDividendAccrual(
+    entry: _IBChangeInDividendAccrual
+) -> Optional[Activity]:
+    codes = entry.code.split(";")
+    if "Re" not in codes:
         return None
 
     # IB "reverses" dividend postings when they're paid out, so they all appear as debits.
-    proceeds = Cash(currency=Currency[entry.currency],
-                    quantity=-Decimal(entry.netAmount))
+    proceeds = Cash(
+        currency=Currency[entry.currency], quantity=-Decimal(entry.netAmount)
+    )
 
-    return CashPayment(date=_parseIBDate(entry.payDate),
-                       instrument=_parseInstrument(entry),
-                       proceeds=proceeds)
+    return CashPayment(
+        date=_parseIBDate(entry.payDate),
+        instrument=_parseInstrument(entry),
+        proceeds=proceeds,
+    )
 
 
-def _parseCurrencyInterestAccrual(entry: _IBInterestAccrualsCurrency
-                                  ) -> Optional[Activity]:
+def _parseCurrencyInterestAccrual(
+    entry: _IBInterestAccrualsCurrency
+) -> Optional[Activity]:
     # This entry includes forex translation, which we don't want.
-    if entry.currency == 'BASE_SUMMARY':
+    if entry.currency == "BASE_SUMMARY":
         return None
 
     # An accrual gets "reversed" when it is credited/debited. Because the
     # reversal refers to the balance of interest, accrual reversal > 0 means
     # that the cash account was debited, while accrual reversal < 0 means the
     # cash account was credited with the interest.
-    proceeds = Cash(currency=Currency[entry.currency],
-                    quantity=-Decimal(entry.accrualReversal))
+    proceeds = Cash(
+        currency=Currency[entry.currency], quantity=-Decimal(entry.accrualReversal)
+    )
 
     # Using `toDate` here since there are no dates attached to the actual
     # accruals.
-    return CashPayment(date=_parseIBDate(entry.toDate),
-                       instrument=None,
-                       proceeds=proceeds)
+    return CashPayment(
+        date=_parseIBDate(entry.toDate), instrument=None, proceeds=proceeds
+    )
 
 
 def _parseStockLoanFee(entry: _IBSLBFee) -> Optional[Activity]:
     # We don't see accrual reversals here, because it rolls up into total interest accounting, so use the accrual postings instead.
-    codes = entry.code.split(';')
-    if 'Po' not in codes:
+    codes = entry.code.split(";")
+    if "Po" not in codes:
         return None
 
-    proceeds = Cash(currency=Currency[entry.currency],
-                    quantity=Decimal(entry.netLendFee))
+    proceeds = Cash(
+        currency=Currency[entry.currency], quantity=Decimal(entry.netLendFee)
+    )
 
-    return CashPayment(date=_parseIBDate(entry.valueDate),
-                       instrument=_parseInstrument(entry),
-                       proceeds=proceeds)
+    return CashPayment(
+        date=_parseIBDate(entry.valueDate),
+        instrument=_parseInstrument(entry),
+        proceeds=proceeds,
+    )
 
 
-_NT = TypeVar('_NT', _IBChangeInDividendAccrual, _IBSLBFee,
-              _IBInterestAccrualsCurrency)
+_NT = TypeVar("_NT", _IBChangeInDividendAccrual, _IBSLBFee, _IBInterestAccrualsCurrency)
 
 
-def _parseActivityType(report: IB.FlexReport, name: str, t: Type[_NT],
-                       transform: Callable[[_NT], Optional[Activity]],
-                       lenient: bool) -> Iterable[Activity]:
+def _parseActivityType(
+    report: IB.FlexReport,
+    name: str,
+    t: Type[_NT],
+    transform: Callable[[_NT], Optional[Activity]],
+    lenient: bool,
+) -> Iterable[Activity]:
     return filter(
         None,
-        parsetools.lenientParse((t(**x.__dict__)
-                      for x in report.extract(name, parseNumbers=False)),
-                     transform=transform,
-                     lenient=lenient))
+        parsetools.lenientParse(
+            (t(**x.__dict__) for x in report.extract(name, parseNumbers=False)),
+            transform=transform,
+            lenient=lenient,
+        ),
+    )
 
 
-def _activityFromReport(report: IB.FlexReport,
-                        lenient: bool) -> List[Activity]:
+def _activityFromReport(report: IB.FlexReport, lenient: bool) -> List[Activity]:
     return list(
         chain(
-            _parseActivityType(report,
-                               'ChangeInDividendAccrual',
-                               _IBChangeInDividendAccrual,
-                               transform=_parseChangeInDividendAccrual,
-                               lenient=lenient),
-            _parseActivityType(report,
-                               'SLBFee',
-                               _IBSLBFee,
-                               transform=_parseStockLoanFee,
-                               lenient=lenient),
-            _parseActivityType(report,
-                               'InterestAccrualsCurrency',
-                               _IBInterestAccrualsCurrency,
-                               transform=_parseCurrencyInterestAccrual,
-                               lenient=lenient)))
+            _parseActivityType(
+                report,
+                "ChangeInDividendAccrual",
+                _IBChangeInDividendAccrual,
+                transform=_parseChangeInDividendAccrual,
+                lenient=lenient,
+            ),
+            _parseActivityType(
+                report,
+                "SLBFee",
+                _IBSLBFee,
+                transform=_parseStockLoanFee,
+                lenient=lenient,
+            ),
+            _parseActivityType(
+                report,
+                "InterestAccrualsCurrency",
+                _IBInterestAccrualsCurrency,
+                transform=_parseCurrencyInterestAccrual,
+                lenient=lenient,
+            ),
+        )
+    )
 
 
 # TODO: This should eventually be unified with trade parsing.
 # See https://github.com/jspahrsummers/bankroll/issues/36.
-def _parseNonTradeActivity(path: Path,
-                           lenient: bool = False) -> List[Activity]:
+def _parseNonTradeActivity(path: Path, lenient: bool = False) -> List[Activity]:
     return _activityFromReport(IB.FlexReport(path=path), lenient=lenient)
 
 
@@ -611,26 +685,28 @@ class _SpinnerOnLogHandler(logging.Handler):
 
 
 def _backoffFlexReport(details: Dict[str, Any]) -> None:
-    wait: float = details['wait']
-    logging.warn(f'Backing off {wait:.0f} seconds before retrying…')
+    wait: float = details["wait"]
+    logging.warn(f"Backing off {wait:.0f} seconds before retrying…")
 
 
 def _flexErrorIsFatal(exception: IB.FlexError) -> bool:
     # https://www.interactivebrokers.co.uk/en/software/am/am/reports/version_3_error_codes.htm
-    return 'Please try again shortly.' not in str(exception)
+    return "Please try again shortly." not in str(exception)
 
 
 @no_type_check
-@backoff.on_exception(backoff.constant,
-                      IB.FlexError,
-                      interval=count(start=3, step=3),
-                      max_tries=5,
-                      giveup=_flexErrorIsFatal,
-                      on_backoff=_backoffFlexReport)
+@backoff.on_exception(
+    backoff.constant,
+    IB.FlexError,
+    interval=count(start=3, step=3),
+    max_tries=5,
+    giveup=_flexErrorIsFatal,
+    on_backoff=_backoffFlexReport,
+)
 def _downloadFlexReport(name: str, token: str, queryID: int) -> IB.FlexReport:
-    with Spinner(f'Downloading {name} report ') as spinner:
+    with Spinner(f"Downloading {name} report ") as spinner:
         handler = _SpinnerOnLogHandler(spinner)
-        logger = logging.getLogger('ib_insync.flexreport')
+        logger = logging.getLogger("ib_insync.flexreport")
         logger.setLevel(logging.INFO)
         logger.addHandler(handler)
 
@@ -641,45 +717,53 @@ def _downloadFlexReport(name: str, token: str, queryID: int) -> IB.FlexReport:
             logger.removeHandler(handler)
 
 
-def _downloadTrades(token: str, queryID: int,
-                    lenient: bool = False) -> List[Trade]:
-    return _tradesFromReport(_downloadFlexReport(name='Trades',
-                                                 token=token,
-                                                 queryID=queryID),
-                             lenient=lenient)
+def _downloadTrades(token: str, queryID: int, lenient: bool = False) -> List[Trade]:
+    return _tradesFromReport(
+        _downloadFlexReport(name="Trades", token=token, queryID=queryID),
+        lenient=lenient,
+    )
 
 
 # TODO: This should eventually be unified with trade parsing.
 # See https://github.com/jspahrsummers/bankroll/issues/36.
-def _downloadNonTradeActivity(token: str, queryID: int,
-                              lenient: bool = False) -> List[Activity]:
-    return _activityFromReport(_downloadFlexReport(name='Activity',
-                                                   token=token,
-                                                   queryID=queryID),
-                               lenient=lenient)
+def _downloadNonTradeActivity(
+    token: str, queryID: int, lenient: bool = False
+) -> List[Activity]:
+    return _activityFromReport(
+        _downloadFlexReport(name="Activity", token=token, queryID=queryID),
+        lenient=lenient,
+    )
 
 
 def _extractCash(val: IB.AccountValue) -> Cash:
     if val.currency not in Currency.__members__:
-        raise ValueError(f'Unrecognized currency in account value: {val}')
+        raise ValueError(f"Unrecognized currency in account value: {val}")
 
-    return Cash(currency=Currency[val.currency],
-                quantity=_parseFiniteDecimal(val.value))
+    return Cash(
+        currency=Currency[val.currency], quantity=_parseFiniteDecimal(val.value)
+    )
 
 
 def _downloadBalance(ib: IB.IB, lenient: bool) -> AccountBalance:
-    accountValues = (val for val in ib.accountSummary()
-                     if val.account == 'All' and val.tag == 'TotalCashBalance'
-                     and val.currency != 'BASE')
+    accountValues = (
+        val
+        for val in ib.accountSummary()
+        if val.account == "All"
+        and val.tag == "TotalCashBalance"
+        and val.currency != "BASE"
+    )
 
     cashByCurrency: Dict[Currency, Cash] = {}
 
-    for cash in parsetools.lenientParse(accountValues,
-                             transform=_extractCash,
-                             lenient=lenient):
-        cashByCurrency[cash.currency] = cashByCurrency.get(
-            cash.currency, Cash(currency=cash.currency,
-                                quantity=Decimal(0))) + cash
+    for cash in parsetools.lenientParse(
+        accountValues, transform=_extractCash, lenient=lenient
+    ):
+        cashByCurrency[cash.currency] = (
+            cashByCurrency.get(
+                cash.currency, Cash(currency=cash.currency, quantity=Decimal(0))
+            )
+            + cash
+        )
 
     return AccountBalance(cash=cashByCurrency)
 
@@ -687,44 +771,52 @@ def _downloadBalance(ib: IB.IB, lenient: bool) -> AccountBalance:
 def _stockContract(stock: Stock) -> IB.Contract:
     return IB.Stock(
         symbol=stock.symbol,
-        exchange=f'SMART:{stock.exchange}' if stock.exchange else 'SMART',
-        currency=stock.currency.name)
+        exchange=f"SMART:{stock.exchange}" if stock.exchange else "SMART",
+        currency=stock.currency.name,
+    )
 
 
 def _bondContract(bond: Bond) -> IB.Contract:
-    return IB.Bond(symbol=bond.symbol,
-                   exchange=bond.exchange or 'SMART',
-                   currency=bond.currency.name)
+    return IB.Bond(
+        symbol=bond.symbol,
+        exchange=bond.exchange or "SMART",
+        currency=bond.currency.name,
+    )
 
 
-def _optionContract(option: Option,
-                    cls: Type[IB.Contract] = IB.Option) -> IB.Contract:
-    lastTradeDate = option.expiration.strftime('%Y%m%d')
-    defaultExchange = '' if issubclass(cls, IB.FuturesOption) else 'SMART'
+def _optionContract(option: Option, cls: Type[IB.Contract] = IB.Option) -> IB.Contract:
+    lastTradeDate = option.expiration.strftime("%Y%m%d")
+    defaultExchange = "" if issubclass(cls, IB.FuturesOption) else "SMART"
 
-    return cls(localSymbol=option.symbol,
-               exchange=option.exchange or defaultExchange,
-               currency=option.currency.name,
-               lastTradeDateOrContractMonth=lastTradeDate,
-               right=option.optionType.value,
-               strike=float(option.strike),
-               multiplier=str(option.multiplier))
+    return cls(
+        localSymbol=option.symbol,
+        exchange=option.exchange or defaultExchange,
+        currency=option.currency.name,
+        lastTradeDateOrContractMonth=lastTradeDate,
+        right=option.optionType.value,
+        strike=float(option.strike),
+        multiplier=str(option.multiplier),
+    )
 
 
 def _futuresContract(future: Future) -> IB.Contract:
-    lastTradeDate = future.expiration.strftime('%Y%m%d')
+    lastTradeDate = future.expiration.strftime("%Y%m%d")
 
-    return IB.Future(symbol=future.symbol,
-                     exchange=future.exchange or '',
-                     currency=future.currency.name,
-                     multiplier=str(future.multiplier),
-                     lastTradeDateOrContractMonth=lastTradeDate)
+    return IB.Future(
+        symbol=future.symbol,
+        exchange=future.exchange or "",
+        currency=future.currency.name,
+        multiplier=str(future.multiplier),
+        lastTradeDateOrContractMonth=lastTradeDate,
+    )
 
 
 def _forexContract(forex: Forex) -> IB.Contract:
-    return IB.Forex(pair=forex.symbol,
-                    currency=forex.currency.name,
-                    exchange=forex.exchange or 'SMART')
+    return IB.Forex(
+        pair=forex.symbol,
+        currency=forex.currency.name,
+        exchange=forex.exchange or "SMART",
+    )
 
 
 def contract(instrument: Instrument) -> IB.Contract:
@@ -741,7 +833,7 @@ def contract(instrument: Instrument) -> IB.Contract:
     elif isinstance(instrument, Forex):
         return _forexContract(instrument)
     else:
-        raise ValueError(f'Unexpected type of instrument: {instrument!r}')
+        raise ValueError(f"Unexpected type of instrument: {instrument!r}")
 
 
 # https://interactivebrokers.github.io/tws-api/market_data_type.html
@@ -757,13 +849,13 @@ class IBDataProvider(MarketDataProvider):
         self._client = client
         super().__init__()
 
-    def qualifyContracts(self, instruments: Iterable[Instrument]
-                         ) -> Dict[Instrument, IB.Contract]:
+    def qualifyContracts(
+        self, instruments: Iterable[Instrument]
+    ) -> Dict[Instrument, IB.Contract]:
         # IB.Contract is not guaranteed to be hashable, so we orient the table this way, albeit less useful.
         # TODO: Check uniqueness of instruments
         contractsByInstrument: Dict[Instrument, IB.Contract] = {
-            i: contract(i)
-            for i in instruments
+            i: contract(i) for i in instruments
         }
 
         self._client.qualifyContracts(*contractsByInstrument.values())
@@ -774,18 +866,20 @@ class IBDataProvider(MarketDataProvider):
         contractsByInstrument = self.qualifyContracts([instrument])
         data = self._client.reqHistoricalData(
             contractsByInstrument[instrument],
-            endDateTime='',
-            durationStr='10 Y',
-            barSizeSetting='1 day',
-            whatToShow='TRADES',
+            endDateTime="",
+            durationStr="10 Y",
+            barSizeSetting="1 day",
+            whatToShow="TRADES",
             useRTH=True,
-            formatDate=1)
+            formatDate=1,
+        )
         return IB.util.df(data)
 
-    def fetchQuotes(self,
-                    instruments: Iterable[Instrument],
-                    dataType: _MarketDataType = _MarketDataType.DELAYED_FROZEN
-                    ) -> Iterable[Tuple[Instrument, Quote]]:
+    def fetchQuotes(
+        self,
+        instruments: Iterable[Instrument],
+        dataType: _MarketDataType = _MarketDataType.DELAYED_FROZEN,
+    ) -> Iterable[Tuple[Instrument, Quote]]:
         self._client.reqMarketDataType(dataType.value)
 
         contractsByInstrument = self.qualifyContracts(instruments)
@@ -795,8 +889,9 @@ class IBDataProvider(MarketDataProvider):
         tickers = self._client.reqTickers(*contractsByInstrument.values())
 
         for ticker in tickers:
-            instrument = next((i for (i, c) in contractsByInstrument.items()
-                               if c == ticker.contract))
+            instrument = next(
+                (i for (i, c) in contractsByInstrument.items() if c == ticker.contract)
+            )
 
             bid: Optional[Cash] = None
             ask: Optional[Cash] = None
@@ -809,21 +904,25 @@ class IBDataProvider(MarketDataProvider):
             if instrument.currency == Currency.GBP:
                 factor = 100
 
-            if (ticker.bid
-                    and math.isfinite(ticker.bid)) and not ticker.bidSize == 0:
-                bid = Cash(currency=instrument.currency,
-                           quantity=Decimal(ticker.bid) / factor)
-            if (ticker.ask
-                    and math.isfinite(ticker.ask)) and not ticker.askSize == 0:
-                ask = Cash(currency=instrument.currency,
-                           quantity=Decimal(ticker.ask) / factor)
-            if (ticker.last and math.isfinite(
-                    ticker.last)) and not ticker.lastSize == 0:
-                last = Cash(currency=instrument.currency,
-                            quantity=Decimal(ticker.last) / factor)
+            if (ticker.bid and math.isfinite(ticker.bid)) and not ticker.bidSize == 0:
+                bid = Cash(
+                    currency=instrument.currency, quantity=Decimal(ticker.bid) / factor
+                )
+            if (ticker.ask and math.isfinite(ticker.ask)) and not ticker.askSize == 0:
+                ask = Cash(
+                    currency=instrument.currency, quantity=Decimal(ticker.ask) / factor
+                )
+            if (
+                ticker.last and math.isfinite(ticker.last)
+            ) and not ticker.lastSize == 0:
+                last = Cash(
+                    currency=instrument.currency, quantity=Decimal(ticker.last) / factor
+                )
             if ticker.close and math.isfinite(ticker.close):
-                close = Cash(currency=instrument.currency,
-                             quantity=Decimal(ticker.close) / factor)
+                close = Cash(
+                    currency=instrument.currency,
+                    quantity=Decimal(ticker.close) / factor,
+                )
 
             yield (instrument, Quote(bid=bid, ask=ask, last=last, close=close))
 
@@ -833,8 +932,9 @@ class IBAccount(MarketConnectedAccountData):
     _client: Optional[IB.IB] = None
 
     @classmethod
-    def fromSettings(cls, settings: Mapping[configuration.Settings, str],
-                     lenient: bool) -> 'IBAccount':
+    def fromSettings(
+        cls, settings: Mapping[configuration.Settings, str], lenient: bool
+    ) -> "IBAccount":
         port = settings.get(Settings.TWS_PORT)
 
         tradesSetting = settings.get(Settings.TRADES)
@@ -855,18 +955,22 @@ class IBAccount(MarketConnectedAccountData):
             else:
                 activity = int(activitySetting)
 
-        return cls(twsPort=int(port) if port else None,
-                   flexToken=settings.get(Settings.FLEX_TOKEN),
-                   trades=trades,
-                   activity=activity,
-                   lenient=lenient)
+        return cls(
+            twsPort=int(port) if port else None,
+            flexToken=settings.get(Settings.FLEX_TOKEN),
+            trades=trades,
+            activity=activity,
+            lenient=lenient,
+        )
 
-    def __init__(self,
-                 twsPort: Optional[int] = None,
-                 flexToken: Optional[str] = None,
-                 trades: Union[Path, int, None] = None,
-                 activity: Union[Path, int, None] = None,
-                 lenient: bool = False):
+    def __init__(
+        self,
+        twsPort: Optional[int] = None,
+        flexToken: Optional[str] = None,
+        trades: Union[Path, int, None] = None,
+        activity: Union[Path, int, None] = None,
+        lenient: bool = False,
+    ):
         self._twsPort = twsPort
         self._flexToken = flexToken
         self._trades = trades
@@ -882,11 +986,12 @@ class IBAccount(MarketConnectedAccountData):
         if not self._client:
             self._client = IB.IB()
             self._client.connect(
-                '127.0.0.1',
+                "127.0.0.1",
                 port=self._twsPort,
                 # Random client ID to minimize chances of conflict
                 clientId=randint(1, 1000000),
-                readonly=True)
+                readonly=True,
+            )
 
         return self._client
 
@@ -903,21 +1008,21 @@ class IBAccount(MarketConnectedAccountData):
         self._cachedActivity = []
 
         if isinstance(self._trades, Path):
-            self._cachedActivity += _parseTrades(self._trades,
-                                                 lenient=self._lenient)
+            self._cachedActivity += _parseTrades(self._trades, lenient=self._lenient)
         elif self._trades:
             if not self._flexToken:
                 raise ValueError(
                     f'Trades "{self._trades}"" must exist as local path, or a Flex token must be provided to run as a query'
                 )
 
-            self._cachedActivity += _downloadTrades(token=self._flexToken,
-                                                    queryID=self._trades,
-                                                    lenient=self._lenient)
+            self._cachedActivity += _downloadTrades(
+                token=self._flexToken, queryID=self._trades, lenient=self._lenient
+            )
 
         if isinstance(self._activity, Path):
             self._cachedActivity += _parseNonTradeActivity(
-                self._activity, lenient=self._lenient)
+                self._activity, lenient=self._lenient
+            )
         elif self._activity:
             if not self._flexToken:
                 raise ValueError(
@@ -925,9 +1030,8 @@ class IBAccount(MarketConnectedAccountData):
                 )
 
             self._cachedActivity += _downloadNonTradeActivity(
-                token=self._flexToken,
-                queryID=self._activity,
-                lenient=self._lenient)
+                token=self._flexToken, queryID=self._activity, lenient=self._lenient
+            )
 
         return self._cachedActivity
 
