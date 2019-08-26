@@ -1,21 +1,28 @@
-from datetime import datetime
-from decimal import Context, Decimal, DivisionByZero, Overflow, InvalidOperation, localcontext
-from enum import Enum, IntEnum, unique
-from itertools import chain, count
-from bankroll.model import AccountBalance, AccountData, Currency, Cash, Instrument, Stock, Bond, Option, OptionType, FutureOption, Future, Forex, Position, TradeFlags, Trade, MarketDataProvider, Quote, Activity, CashPayment
-from bankroll.parsetools import lenientParse
-from pathlib import Path
-from progress.spinner import Spinner
-from random import randint
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Type, TypeVar, Union, no_type_check
-import pandas as pd
-
-import backoff
-import bankroll.configuration as configuration
-import ib_insync as IB
 import logging
 import math
 import re
+from datetime import datetime
+from decimal import (Context, Decimal, DivisionByZero, InvalidOperation,
+                     Overflow, localcontext)
+from enum import Enum, IntEnum, unique
+from itertools import chain, count
+from pathlib import Path
+from random import randint
+from typing import (Any, Awaitable, Callable, Dict, Iterable, List, Mapping,
+                    NamedTuple, Optional, Sequence, Tuple, Type, TypeVar,
+                    Union, no_type_check)
+
+import backoff  # type: ignore
+import ib_insync as IB  # type: ignore
+import pandas as pd  # type: ignore
+from progress.spinner import Spinner  # type: ignore
+
+from bankroll.broker import configuration, parsetools
+from bankroll.marketdata import MarketConnectedAccountData, MarketDataProvider
+from bankroll.model import (AccountBalance, Activity, Bond, Cash, CashPayment,
+                            Currency, Forex, Future, FutureOption, Instrument,
+                            Option, OptionType, Position, Quote, Stock, Trade,
+                            TradeFlags)
 
 
 @unique
@@ -177,7 +184,7 @@ def _extractPosition(p: IB.Position) -> Position:
 
 def _downloadPositions(ib: IB.IB, lenient: bool) -> List[Position]:
     return list(
-        lenientParse(ib.positions(),
+        parsetools.lenientParse(ib.positions(),
                      transform=_extractPosition,
                      lenient=lenient))
 
@@ -491,7 +498,7 @@ def _parseTradeConfirm(trade: _IBTradeConfirm) -> Trade:
 
 def _tradesFromReport(report: IB.FlexReport, lenient: bool) -> List[Trade]:
     return list(
-        lenientParse(
+        parsetools.lenientParse(
             (_IBTradeConfirm(**t.__dict__)
              for t in report.extract('TradeConfirm', parseNumbers=False)),
             transform=_parseTradeConfirm,
@@ -560,7 +567,7 @@ def _parseActivityType(report: IB.FlexReport, name: str, t: Type[_NT],
                        lenient: bool) -> Iterable[Activity]:
     return filter(
         None,
-        lenientParse((t(**x.__dict__)
+        parsetools.lenientParse((t(**x.__dict__)
                       for x in report.extract(name, parseNumbers=False)),
                      transform=transform,
                      lenient=lenient))
@@ -667,7 +674,7 @@ def _downloadBalance(ib: IB.IB, lenient: bool) -> AccountBalance:
 
     cashByCurrency: Dict[Currency, Cash] = {}
 
-    for cash in lenientParse(accountValues,
+    for cash in parsetools.lenientParse(accountValues,
                              transform=_extractCash,
                              lenient=lenient):
         cashByCurrency[cash.currency] = cashByCurrency.get(
@@ -821,7 +828,7 @@ class IBDataProvider(MarketDataProvider):
             yield (instrument, Quote(bid=bid, ask=ask, last=last, close=close))
 
 
-class IBAccount(AccountData):
+class IBAccount(MarketConnectedAccountData):
     _cachedActivity: Optional[Sequence[Activity]] = None
     _client: Optional[IB.IB] = None
 
@@ -931,5 +938,5 @@ class IBAccount(AccountData):
         return _downloadBalance(self.client, self._lenient)
 
     @property
-    def marketDataProvider(self) -> Optional[MarketDataProvider]:
+    def marketDataProvider(self) -> MarketDataProvider:
         return IBDataProvider(client=self.client)

@@ -27,11 +27,13 @@ setup(
         "Typing :: Typed",
     ],
     install_requires=[
+        "backoff>=1.8",
         "bankroll_broker @ git+https://github.com/bankroll-py/bankroll-broker@master#egg=bankroll_broker",
         "bankroll_marketdata @ git+https://github.com/bankroll-py/bankroll-marketdata@master#egg=bankroll_marketdata",
         "bankroll_model @ git+https://github.com/bankroll-py/bankroll-model@master#egg=bankroll_model",
         "ib-insync>=0.9.50",
         "pandas>=0.25.1",
+        "progress>=1.5",
     ],
     keywords="trading investing finance portfolio ib ibkr tws",
 )
