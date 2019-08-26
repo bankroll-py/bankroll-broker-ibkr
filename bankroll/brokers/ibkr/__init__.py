@@ -1,3 +1,3 @@
-from .account import IBAccount, IBDataProvider, contract
+from .account import IBAccount, IBDataProvider, Settings, contract
 
-__all__ = ["IBAccount", "IBDataProvider", "contract"]
+__all__ = ["IBAccount", "IBDataProvider", "Settings", "contract"]
