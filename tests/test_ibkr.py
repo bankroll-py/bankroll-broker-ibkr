@@ -1,42 +1,22 @@
-from bankroll import (
-    Cash,
-    Currency,
-    Position,
-    Instrument,
-    Stock,
-    Bond,
-    Option,
-    OptionType,
-    Forex,
-    Future,
-    FutureOption,
-    Trade,
-    TradeFlags,
-    CashPayment,
-)
-from bankroll.brokers import ibkr
+import logging
+import unittest
 from datetime import date
 from decimal import Decimal
-from hypothesis import given, reproduce_failure, settings, Verbosity
-from hypothesis.strategies import (
-    builds,
-    dates,
-    decimals,
-    from_regex,
-    from_type,
-    just,
-    lists,
-    one_of,
-    sampled_from,
-    text,
-)
 from itertools import groupby
 from pathlib import Path
 
+import ib_insync as IB  # type: ignore
+from hypothesis import Verbosity, given, reproduce_failure, settings
+from hypothesis.strategies import (builds, dates, decimals, from_regex,
+                                   from_type, just, lists, one_of,
+                                   sampled_from, text)
 from tests import helpers
-import ib_insync as IB
-import logging
-import unittest
+
+import bankroll.brokers.ibkr as ibkr
+from bankroll.brokers.ibkr.account import _IBTradeConfirm, _parseTradeConfirm, _extractPosition
+from bankroll.model import (Bond, Cash, CashPayment, Currency, Forex, Future,
+                            FutureOption, Instrument, Option, OptionType,
+                            Position, Stock, Trade, TradeFlags)
 
 
 class TestIBKRTrades(unittest.TestCase):
@@ -382,7 +362,7 @@ class TestIBKRParsing(unittest.TestCase):
     validExchanges = one_of(just(""), helpers.exchanges())
 
     validTradeConfirms = builds(
-        ibkr._IBTradeConfirm,
+        _IBTradeConfirm,
         symbol=validSymbols,
         underlyingSymbol=validSymbols,
         currency=validCurrencies,
@@ -404,7 +384,7 @@ class TestIBKRParsing(unittest.TestCase):
     )
 
     allTradeConfirms = builds(
-        ibkr._IBTradeConfirm,
+        _IBTradeConfirm,
         symbol=one_of(validSymbols, text()),
         underlyingSymbol=one_of(validSymbols, text()),
         currency=one_of(validCurrencies, text()),
@@ -470,7 +450,7 @@ class TestIBKRParsing(unittest.TestCase):
     )
 
     def validateTradeContract(
-        self, tradeConfirm: ibkr._IBTradeConfirm, instrument: Instrument
+        self, tradeConfirm: _IBTradeConfirm, instrument: Instrument
     ) -> None:
         contract = ibkr.contract(instrument)
         if tradeConfirm.assetCategory == "BILL":
@@ -494,9 +474,9 @@ class TestIBKRParsing(unittest.TestCase):
             self.assertEqual(contract.lastTradeDateOrContractMonth, tradeConfirm.expiry)
 
     @given(allTradeConfirms)
-    def test_fuzzTradeConfirm(self, tradeConfirm: ibkr._IBTradeConfirm) -> None:
+    def test_fuzzTradeConfirm(self, tradeConfirm: _IBTradeConfirm) -> None:
         try:
-            trade = ibkr._parseTradeConfirm(tradeConfirm)
+            trade = _parseTradeConfirm(tradeConfirm)
         except ValueError:
             return
 
@@ -532,7 +512,7 @@ class TestIBKRParsing(unittest.TestCase):
     @given(allPositions)
     def test_fuzzPosition(self, position: IB.Position) -> None:
         try:
-            parsedPosition = ibkr._extractPosition(position)
+            parsedPosition = _extractPosition(position)
         except ValueError:
             return
 
