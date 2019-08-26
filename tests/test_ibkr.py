@@ -7,16 +7,42 @@ from pathlib import Path
 
 import ib_insync as IB  # type: ignore
 from hypothesis import Verbosity, given, reproduce_failure, settings
-from hypothesis.strategies import (builds, dates, decimals, from_regex,
-                                   from_type, just, lists, one_of,
-                                   sampled_from, text)
+from hypothesis.strategies import (
+    builds,
+    dates,
+    decimals,
+    from_regex,
+    from_type,
+    just,
+    lists,
+    one_of,
+    sampled_from,
+    text,
+)
 from tests import helpers
 
 import bankroll.brokers.ibkr as ibkr
-from bankroll.brokers.ibkr.account import _IBTradeConfirm, _parseTradeConfirm, _extractPosition
-from bankroll.model import (Bond, Cash, CashPayment, Currency, Forex, Future,
-                            FutureOption, Instrument, Option, OptionType,
-                            Position, Stock, Trade, TradeFlags)
+from bankroll.brokers.ibkr.account import (
+    _IBTradeConfirm,
+    _parseTradeConfirm,
+    _extractPosition,
+)
+from bankroll.model import (
+    Bond,
+    Cash,
+    CashPayment,
+    Currency,
+    Forex,
+    Future,
+    FutureOption,
+    Instrument,
+    Option,
+    OptionType,
+    Position,
+    Stock,
+    Trade,
+    TradeFlags,
+)
 
 
 class TestIBKRTrades(unittest.TestCase):

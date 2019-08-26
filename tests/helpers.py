@@ -4,16 +4,44 @@ from decimal import Decimal
 from typing import List, Optional, TypeVar
 
 from hypothesis import settings
-from hypothesis.strategies import (SearchStrategy, builds, dates, datetimes,
-                                   decimals, from_regex, from_type, integers,
-                                   just, lists, none, one_of,
-                                   register_type_strategy, sampled_from, sets,
-                                   text)
+from hypothesis.strategies import (
+    SearchStrategy,
+    builds,
+    dates,
+    datetimes,
+    decimals,
+    from_regex,
+    from_type,
+    integers,
+    just,
+    lists,
+    none,
+    one_of,
+    register_type_strategy,
+    sampled_from,
+    sets,
+    text,
+)
 
-from bankroll.model import (AccountBalance, Activity, Bond, Cash, CashPayment,
-                            Currency, Forex, Future, FutureOption, Instrument,
-                            Option, OptionType, Position, Quote, Stock, Trade,
-                            TradeFlags)
+from bankroll.model import (
+    AccountBalance,
+    Activity,
+    Bond,
+    Cash,
+    CashPayment,
+    Currency,
+    Forex,
+    Future,
+    FutureOption,
+    Instrument,
+    Option,
+    OptionType,
+    Position,
+    Quote,
+    Stock,
+    Trade,
+    TradeFlags,
+)
 
 settings.register_profile("ci", max_examples=1000, deadline=100)
 settings.register_profile("dev", max_examples=10, deadline=100)
