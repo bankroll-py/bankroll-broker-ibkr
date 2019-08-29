@@ -815,7 +815,7 @@ def _forexContract(forex: Forex) -> IB.Contract:
     return IB.Forex(
         pair=forex.symbol,
         currency=forex.currency.name,
-        exchange=forex.exchange or "SMART",
+        exchange=forex.exchange or "IDEALPRO",
     )
 
 
