@@ -5,7 +5,7 @@ from typing import Dict, Iterable, Optional, Tuple, Type
 
 import ib_insync as IB  # type: ignore
 import pandas as pd  # type: ignore
-from bankroll.marketdata import MarketDataProvider
+from bankroll.marketdata import StreamingMarketDataProvider
 from bankroll.model import (
     Bond,
     Cash,
@@ -18,6 +18,8 @@ from bankroll.model import (
     Quote,
     Stock,
 )
+
+from rx.core.typing import Observable
 
 
 def _stockContract(stock: Stock) -> IB.Contract:
@@ -96,9 +98,17 @@ class _MarketDataType(IntEnum):
     DELAYED_FROZEN = 4
 
 
-class IBDataProvider(MarketDataProvider):
-    def __init__(self, client: IB.IB):
+class IBDataProvider(StreamingMarketDataProvider):
+    def __init__(
+        self,
+        client: IB.IB,
+        dataType: Optional[_MarketDataType] = _MarketDataType.DELAYED_FROZEN,
+    ):
         self._client = client
+
+        if dataType is not None:
+            self._client.reqMarketDataType(dataType.value)
+
         super().__init__()
 
     def qualifyContracts(
@@ -127,12 +137,45 @@ class IBDataProvider(MarketDataProvider):
         )
         return IB.util.df(data)
 
+    def _quoteFromTicker(self, ticker: IB.Ticker, instrument: Instrument) -> Quote:
+        bid: Optional[Cash] = None
+        ask: Optional[Cash] = None
+        last: Optional[Cash] = None
+        close: Optional[Cash] = None
+
+        factor = 1
+
+        # Tickers are quoted in GBX despite all the other data being in GBP.
+        if instrument.currency == Currency.GBP:
+            factor = 100
+
+        if (ticker.bid and math.isfinite(ticker.bid)) and not ticker.bidSize == 0:
+            bid = Cash(
+                currency=instrument.currency, quantity=Decimal(ticker.bid) / factor
+            )
+        if (ticker.ask and math.isfinite(ticker.ask)) and not ticker.askSize == 0:
+            ask = Cash(
+                currency=instrument.currency, quantity=Decimal(ticker.ask) / factor
+            )
+        if (ticker.last and math.isfinite(ticker.last)) and not ticker.lastSize == 0:
+            last = Cash(
+                currency=instrument.currency, quantity=Decimal(ticker.last) / factor
+            )
+        if ticker.close and math.isfinite(ticker.close):
+            close = Cash(
+                currency=instrument.currency, quantity=Decimal(ticker.close) / factor
+            )
+
+        return Quote(bid=bid, ask=ask, last=last, close=close)
+
     def fetchQuotes(
         self,
         instruments: Iterable[Instrument],
-        dataType: _MarketDataType = _MarketDataType.DELAYED_FROZEN,
+        # TODO: Remove this (but it will break backwards compatibility).
+        dataType: Optional[_MarketDataType] = None,
     ) -> Iterable[Tuple[Instrument, Quote]]:
-        self._client.reqMarketDataType(dataType.value)
+        if dataType is not None:
+            self._client.reqMarketDataType(dataType.value)
 
         contractsByInstrument = self.qualifyContracts(instruments)
 
@@ -145,35 +188,9 @@ class IBDataProvider(MarketDataProvider):
                 (i for (i, c) in contractsByInstrument.items() if c == ticker.contract)
             )
 
-            bid: Optional[Cash] = None
-            ask: Optional[Cash] = None
-            last: Optional[Cash] = None
-            close: Optional[Cash] = None
+            yield (instrument, self._quoteFromTicker(ticker, instrument))
 
-            factor = 1
-
-            # Tickers are quoted in GBX despite all the other data being in GBP.
-            if instrument.currency == Currency.GBP:
-                factor = 100
-
-            if (ticker.bid and math.isfinite(ticker.bid)) and not ticker.bidSize == 0:
-                bid = Cash(
-                    currency=instrument.currency, quantity=Decimal(ticker.bid) / factor
-                )
-            if (ticker.ask and math.isfinite(ticker.ask)) and not ticker.askSize == 0:
-                ask = Cash(
-                    currency=instrument.currency, quantity=Decimal(ticker.ask) / factor
-                )
-            if (
-                ticker.last and math.isfinite(ticker.last)
-            ) and not ticker.lastSize == 0:
-                last = Cash(
-                    currency=instrument.currency, quantity=Decimal(ticker.last) / factor
-                )
-            if ticker.close and math.isfinite(ticker.close):
-                close = Cash(
-                    currency=instrument.currency,
-                    quantity=Decimal(ticker.close) / factor,
-                )
-
-            yield (instrument, Quote(bid=bid, ask=ask, last=last, close=close))
+    def subscribeToQuotes(
+        self, instruments: Iterable[Instrument]
+    ) -> Observable[Tuple[Instrument, Quote]]:
+        pass
